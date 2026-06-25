@@ -4,6 +4,7 @@ import sys
 from PySide6.QtWidgets import QApplication
 
 from . import config, database
+from .receiver import start_receiver
 from .resources import app_icon
 from .ui import theme
 from .ui.hourglass_panel import HourglassPanel
@@ -25,6 +26,16 @@ def main() -> None:
     # Init DB
     db = config.db_path()
     database.init(db)
+
+    # Start local HTTP receiver (background daemon thread)
+    if config.get("receiver_enabled"):
+        start_receiver(
+            port=config.get("receiver_port"),
+            official_ui_path=config.official_ui_path(),
+            statusline_raw_path=config.statusline_raw_path(),
+            latest_path=config.latest_json_path(),
+            alt_max_age_secs=config.get("alt_max_age_secs"),
+        )
 
     # Create UI components
     panel = HourglassPanel()

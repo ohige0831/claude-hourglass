@@ -11,6 +11,7 @@ from PySide6.QtWidgets import (
 from ..theme import C, mono_font, ui_font
 from .hourglass_widget import HourglassWidget
 from ...models import UsageSnapshot
+from ...sources import SOURCE_LABELS_JA
 
 
 class _LargeHourglassWidget(HourglassWidget):
@@ -176,6 +177,7 @@ class CurrentStatusTab(QWidget):
         card_other = _Card("その他")
         self._v_cost = card_other.add_row("累計コスト", 11)
         self._v_model = card_other.add_row("モデル", 10)
+        self._v_source = card_other.add_row("ソース", 10)
         self._v_updated = card_other.add_row("最終更新", 10)
         right.addWidget(card_other)
 
@@ -203,12 +205,15 @@ class CurrentStatusTab(QWidget):
             self._hourglass.set_usage(0.0, 0.0)
             return
 
-        h5 = snap.five_hour_used_pct or 0.0
-        h7 = snap.seven_day_used_pct or 0.0
+        h5 = snap.effective_five_hour_pct
+        h7 = snap.effective_seven_day_pct
         self._hourglass.set_usage(h5, h7)
 
         # 5時間制限
-        self._v5_pct.setText(f"{h5:.1f}%")
+        pct5_text = f"{h5:.1f}%"
+        if snap.five_hour_expired:
+            pct5_text += "  （リセット済み）"
+        self._v5_pct.setText(pct5_text)
         self._v5_pct.setStyleSheet(
             f"color: {_pct_color(h5)}; background: transparent; border: none;"
             f" font-family: 'JetBrains Mono', monospace; font-size: 14px; font-weight: bold;"
@@ -217,7 +222,10 @@ class CurrentStatusTab(QWidget):
         self._v5_time.setText(_fmt_local_time(snap.five_hour_resets_at))
 
         # 7日制限
-        self._v7_pct.setText(f"{h7:.1f}%")
+        pct7_text = f"{h7:.1f}%"
+        if snap.seven_day_expired:
+            pct7_text += "  （リセット済み）"
+        self._v7_pct.setText(pct7_text)
         self._v7_pct.setStyleSheet(
             f"color: {_pct_color(h7)}; background: transparent; border: none;"
             f" font-family: 'JetBrains Mono', monospace; font-size: 14px; font-weight: bold;"
@@ -232,6 +240,16 @@ class CurrentStatusTab(QWidget):
             self._v_cost.setText("—")
 
         self._v_model.setText(snap.model_display_name or "—")
+
+        # ソース表示 (差異があれば alt 値も併記)
+        src_ja = SOURCE_LABELS_JA.get(snap.source or "", snap.source_label or "—")
+        source_text = src_ja
+        if snap.alt_source and snap.alt_five_hour_pct is not None:
+            diff = abs((snap.alt_five_hour_pct or 0.0) - snap.effective_five_hour_pct)
+            if diff >= 2.0:
+                alt_ja = SOURCE_LABELS_JA.get(snap.alt_source, snap.alt_source_label or snap.alt_source)
+                source_text += f"  (alt {alt_ja}: {snap.alt_five_hour_pct:.1f}%)"
+        self._v_source.setText(source_text)
 
         try:
             dt = _parse_utc(snap.captured_at)

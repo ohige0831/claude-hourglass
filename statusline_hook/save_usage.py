@@ -59,29 +59,48 @@ try:
 except ImportError:
     _HAS_APP = False
 
+try:
+    from claude_hourglass import sources as _sources_mod
+    _HAS_SOURCES = True
+except ImportError:
+    _HAS_SOURCES = False
+
 
 _DEFAULT_DIR = Path.home() / ".claude_hourglass"
 _DEFAULT_DB = _DEFAULT_DIR / "usage.sqlite"
 _DEFAULT_JSON = _DEFAULT_DIR / "latest_usage.json"
+_DEFAULT_STATUSLINE_RAW = _DEFAULT_DIR / "latest_statusline_raw.json"
+_DEFAULT_OFFICIAL_UI = _DEFAULT_DIR / "latest_official_ui.json"
 
 
 # ---------------------------------------------------------------------------
 # Config resolution (without full app config module)
 # ---------------------------------------------------------------------------
 
-def _resolve_paths() -> tuple[Path, Path]:
+def _resolve_paths() -> tuple[Path, Path, Path, Path]:
+    """(db_path, latest_json, statusline_raw, official_ui) を返す。"""
     if _HAS_APP:
         config.load()
-        return config.db_path(), config.latest_json_path()
+        return (
+            config.db_path(),
+            config.latest_json_path(),
+            config.statusline_raw_path(),
+            config.official_ui_path(),
+        )
 
     cfg_file = _DEFAULT_DIR / "config.json"
     if cfg_file.exists():
         try:
             cfg = json.loads(cfg_file.read_text(encoding="utf-8"))
-            return Path(cfg.get("db_path", _DEFAULT_DB)), Path(cfg.get("latest_json_path", _DEFAULT_JSON))
+            return (
+                Path(cfg.get("db_path", _DEFAULT_DB)),
+                Path(cfg.get("latest_json_path", _DEFAULT_JSON)),
+                Path(cfg.get("latest_statusline_raw_path", _DEFAULT_STATUSLINE_RAW)),
+                Path(cfg.get("latest_official_ui_path", _DEFAULT_OFFICIAL_UI)),
+            )
         except Exception:
             pass
-    return _DEFAULT_DB, _DEFAULT_JSON
+    return _DEFAULT_DB, _DEFAULT_JSON, _DEFAULT_STATUSLINE_RAW, _DEFAULT_OFFICIAL_UI
 
 
 # ---------------------------------------------------------------------------
@@ -109,7 +128,7 @@ CREATE INDEX IF NOT EXISTS idx_session_id  ON usage_snapshots(session_id);
 """
 
 
-def _ts_to_iso(val) -> Optional[str]:
+def _ts_to_iso(val) -> "str | None":
     """エポック秒 (int/float) または文字列を ISO UTC 文字列に変換する。"""
     if val is None:
         return None
@@ -121,11 +140,23 @@ def _ts_to_iso(val) -> Optional[str]:
     return str(val)
 
 
-def _save_standalone(data: dict, db_path: Path, json_path: Path) -> None:
+def _sql_safe(val) -> "int | float | str | bytes | None":
+    """SQLite が受け付けない型 (dict/list 等) を TEXT に変換する。"""
+    if val is None or isinstance(val, (int, float, str, bytes)):
+        return val
+    if isinstance(val, bool):
+        return int(val)
+    try:
+        return json.dumps(val, ensure_ascii=False)
+    except Exception:
+        return str(val)
+
+
+def _save_db_only(data: dict, db_path: Path) -> None:
+    """SQLite にのみ保存する (app module が使えない場合のフォールバック)。"""
     import sqlite3
 
     db_path.parent.mkdir(parents=True, exist_ok=True)
-    json_path.parent.mkdir(parents=True, exist_ok=True)
 
     rate = data.get("rate_limits", {})
     five_hour = rate.get("five_hour", {})
@@ -134,7 +165,7 @@ def _save_standalone(data: dict, db_path: Path, json_path: Path) -> None:
     ctx = data.get("context_window", {})
     model = data.get("model", {})
 
-    row = (
+    raw_values = (
         _ts_to_iso(data.get("captured_at")) or datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
         data.get("session_id"),
         model.get("display_name"),
@@ -147,6 +178,7 @@ def _save_standalone(data: dict, db_path: Path, json_path: Path) -> None:
         data.get("version"),
         json.dumps(data, ensure_ascii=False),
     )
+    row = tuple(_sql_safe(v) for v in raw_values)
 
     con = sqlite3.connect(str(db_path))
     con.executescript(_SCHEMA)
@@ -162,7 +194,164 @@ def _save_standalone(data: dict, db_path: Path, json_path: Path) -> None:
     con.commit()
     con.close()
 
-    json_path.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
+
+# ---------------------------------------------------------------------------
+# Rate-limit generation merge
+# ---------------------------------------------------------------------------
+
+def _parse_resets_dt(val) -> "datetime | None":
+    """resets_at の int/float/str を UTC datetime に変換する。"""
+    if val is None:
+        return None
+    if isinstance(val, (int, float)):
+        try:
+            return datetime.fromtimestamp(int(val), tz=timezone.utc)
+        except Exception:
+            return None
+    for fmt in ("%Y-%m-%dT%H:%M:%S.%fZ", "%Y-%m-%dT%H:%M:%SZ", "%Y-%m-%dT%H:%M:%S"):
+        try:
+            return datetime.strptime(str(val), fmt).replace(tzinfo=timezone.utc)
+        except ValueError:
+            pass
+    return None
+
+
+def _merge_one_limit(
+    key: str,
+    existing: dict,
+    incoming: dict,
+    in_session: "str | None",
+    ex_session: "str | None",
+    now: datetime,
+    notes: list,
+) -> dict:
+    """1つの rate limit エントリのマージ。採用するデータを返す。"""
+    ex_dt = _parse_resets_dt(existing.get("resets_at"))
+    in_dt = _parse_resets_dt(incoming.get("resets_at"))
+    ex_pct = float(existing.get("used_percentage") or 0.0)
+    in_pct = float(incoming.get("used_percentage") or 0.0)
+
+    # existing がない → incoming を無条件採用
+    if ex_dt is None:
+        return incoming
+
+    # incoming に resets_at がない → そのまま採用
+    if in_dt is None:
+        return incoming
+
+    # stale incoming: resets_at が過去かつ used_pct > 0 → 巻き戻り防止
+    if in_dt <= now and in_pct > 0:
+        if ex_dt > now:
+            notes.append(f"{key}:stale-ignored(in={in_pct:.0f}%,ex_resets=future)")
+            return existing
+        # 両方 expired → incoming を採用（更新待ち状態）
+        notes.append(f"{key}:both-expired")
+        return incoming
+
+    # 新しい世代 (resets_at が進んだ) → 採用
+    if in_dt > ex_dt:
+        notes.append(f"{key}:new-window({ex_pct:.0f}%→{in_pct:.0f}%)")
+        return incoming
+
+    # 同じ世代
+    if in_dt == ex_dt:
+        if in_pct >= ex_pct:
+            return incoming  # 上昇 or 同値 → 常に採用
+        # 使用率が下がるケース
+        if in_session and in_session == ex_session:
+            notes.append(f"{key}:same-session-decrease({ex_pct:.0f}%→{in_pct:.0f}%)")
+            return incoming  # 同一セッション → 採用
+        notes.append(f"{key}:cross-session-decrease-ignored({ex_pct:.0f}%→{in_pct:.0f}%)")
+        return existing  # 別セッションの逆行 → 保持
+
+    # 古い世代 → 既存を保持
+    notes.append(f"{key}:old-window-ignored")
+    return existing
+
+
+def _merge_latest_json(existing: dict, incoming: dict, notes: list) -> dict:
+    """rate limits の世代管理マージ。その他フィールド (cost/model 等) は incoming 優先。"""
+    result = dict(incoming)
+
+    ex_rate = existing.get("rate_limits") or {}
+    in_rate = incoming.get("rate_limits") or {}
+
+    if not in_rate:
+        return result
+
+    now = datetime.now(timezone.utc)
+    in_session = incoming.get("session_id")
+    ex_session = existing.get("session_id")
+
+    merged_rate = dict(in_rate)
+    for key in ("five_hour", "seven_day"):
+        ex_limit = ex_rate.get(key) or {}
+        in_limit = in_rate.get(key) or {}
+        merged_rate[key] = _merge_one_limit(
+            key=key,
+            existing=ex_limit,
+            incoming=in_limit,
+            in_session=in_session,
+            ex_session=ex_session,
+            now=now,
+            notes=notes,
+        )
+
+    result["rate_limits"] = merged_rate
+    return result
+
+
+# ---------------------------------------------------------------------------
+# Debug log
+# ---------------------------------------------------------------------------
+
+_DEBUG_LOG = _DEFAULT_DIR / "statusline_debug.log"
+
+
+def _write_debug(
+    data: dict,
+    *,
+    db_saved: bool = False,
+    db_err: str = "",
+    raw_saved: bool = False,
+    raw_err: str = "",
+    latest_saved: bool = False,
+    json_err: str = "",
+    latest_path: "Path | None" = None,
+    merge_notes: "list | None" = None,
+    source: str = "statusline",
+) -> None:
+    try:
+        rate = data.get("rate_limits", {})
+        fh = rate.get("five_hour", {})
+        sd = rate.get("seven_day", {})
+        now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        parts = [
+            now, "called",
+            f"session={data.get('session_id', '—')}",
+            f"has_rate_limits={str(bool(rate)).lower()}",
+            f"5h={fh.get('used_percentage', '—')}",
+            f"7d={sd.get('used_percentage', '—')}",
+            f"captured_at={data.get('captured_at', '—')}",
+            f"source={source}",
+            f"raw_saved={str(raw_saved).lower()}",
+            f"latest_saved={str(latest_saved).lower()}",
+            f"latest_path={latest_path or _DEFAULT_JSON}",
+            f"db_saved={str(db_saved).lower()}",
+        ]
+        if merge_notes:
+            parts.append(f"merge=[{','.join(merge_notes)}]")
+        if db_err:
+            parts.append(f"db_error={db_err!r}")
+        if raw_err:
+            parts.append(f"raw_error={raw_err!r}")
+        if json_err:
+            parts.append(f"json_error={json_err!r}")
+        _DEFAULT_DIR.mkdir(parents=True, exist_ok=True)
+        with _DEBUG_LOG.open("a", encoding="utf-8") as f:
+            f.write(" ".join(parts) + "\n")
+    except Exception:
+        pass
 
 
 # ---------------------------------------------------------------------------
@@ -192,23 +381,87 @@ def main() -> int:
     if "captured_at" not in data:
         data["captured_at"] = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
-    db_path, json_path = _resolve_paths()
+    db_path, json_path, raw_path, official_ui_path = _resolve_paths()
 
+    # ---- DB 保存 (失敗しても続行) ----
+    db_saved = False
+    db_err = ""
     try:
         if _HAS_APP:
             database.init(db_path)
             snap = UsageSnapshot.from_status_json(data)
             database.insert(db_path, snap)
-            json_path.parent.mkdir(parents=True, exist_ok=True)
-            json_path.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
         else:
-            _save_standalone(data, db_path, json_path)
+            _save_db_only(data, db_path)
+        db_saved = True
     except Exception as exc:
-        print(f"save_usage.py: failed to save — {exc}", file=sys.stderr)
-        return 1
+        db_err = str(exc)
+        print(f"save_usage.py: DB save failed — {exc}", file=sys.stderr)
 
-    h5 = data.get("rate_limits", {}).get("five_hour", {}).get("used_percentage", 0)
-    h7 = data.get("rate_limits", {}).get("seven_day", {}).get("used_percentage", 0)
+    # ---- latest_statusline_raw.json 保存 (世代管理マージ) ----
+    raw_saved = False
+    raw_err = ""
+    merge_notes: list = []
+    merged_raw: dict = data
+    try:
+        raw_path.parent.mkdir(parents=True, exist_ok=True)
+
+        existing_raw: dict = {}
+        if raw_path.exists():
+            try:
+                existing_raw = json.loads(raw_path.read_text(encoding="utf-8"))
+            except Exception:
+                pass
+
+        merged_raw = _merge_latest_json(existing_raw, data, merge_notes)
+        merged_raw["source"] = "statusline"
+        merged_raw["source_label"] = _sources_mod.SOURCE_LABELS.get("statusline", "statusLine") if _HAS_SOURCES else "statusLine"
+        raw_path.write_text(json.dumps(merged_raw, indent=2, ensure_ascii=False), encoding="utf-8")
+        raw_saved = True
+    except Exception as exc:
+        raw_err = str(exc)
+        print(f"save_usage.py: raw JSON save failed — {exc}", file=sys.stderr)
+
+    # ---- latest_usage.json 更新 (sources 優先度マージ) ----
+    latest_saved = False
+    json_err = ""
+    merged_data: dict = merged_raw
+    alt_max_age = (config.get("alt_max_age_secs") or 600) if _HAS_APP else 600
+    try:
+        if _HAS_SOURCES:
+            result = _sources_mod.build_latest_json(
+                raw_path, official_ui_path, json_path,
+                alt_max_age_secs=alt_max_age,
+            )
+            if result:
+                merged_data = result
+        else:
+            json_path.parent.mkdir(parents=True, exist_ok=True)
+            json_path.write_text(json.dumps(merged_raw, indent=2, ensure_ascii=False), encoding="utf-8")
+        latest_saved = True
+    except Exception as exc:
+        json_err = str(exc)
+        print(f"save_usage.py: latest JSON update failed — {exc}", file=sys.stderr)
+
+    _write_debug(
+        data,
+        db_saved=db_saved, db_err=db_err,
+        raw_saved=raw_saved, raw_err=raw_err,
+        latest_saved=latest_saved, json_err=json_err,
+        latest_path=json_path,
+        merge_notes=merge_notes,
+        source="statusline",
+    )
+
+    # stdout: merged の実効値を表示
+    merged_rate = merged_data.get("rate_limits", {})
+    now_disp = datetime.now(timezone.utc)
+    def _eff(limit: dict) -> float:
+        rd = _parse_resets_dt(limit.get("resets_at"))
+        pct = float(limit.get("used_percentage") or 0.0)
+        return 0.0 if (rd and rd <= now_disp) else pct
+    h5 = _eff(merged_rate.get("five_hour") or {})
+    h7 = _eff(merged_rate.get("seven_day") or {})
     print(f"[Hourglass] 5h {h5:.1f}% | 7d {h7:.1f}%")
     return 0
 

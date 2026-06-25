@@ -9,6 +9,7 @@ from PySide6.QtWidgets import QMenu, QSystemTrayIcon
 from . import config, database
 from .models import UsageSnapshot
 from .resources import draw_hourglass
+from .sources import SOURCE_LABELS_JA
 from .ui.theme import C
 
 
@@ -96,14 +97,16 @@ class TrayManager:
             self._tray.setIcon(_tray_icon(0.0))
             return
 
-        h5 = snap.five_hour_used_pct or 0.0
-        h7 = snap.seven_day_used_pct or 0.0
+        h5 = snap.effective_five_hour_pct
+        h7 = snap.effective_seven_day_pct
         self._tray.setIcon(_tray_icon(h5))
 
         from .ui.hourglass_panel import _format_reset
         reset_txt = _format_reset(snap.five_hour_resets_at)
+        src_ja = SOURCE_LABELS_JA.get(snap.source or "", snap.source_label or "")
+        source_txt = f"  [{src_ja}]" if src_ja else ""
         self._tray.setToolTip(
-            f"Claude Hourglass\n"
+            f"Claude Hourglass{source_txt}\n"
             f"5h: {h5:.1f}% | 7d: {h7:.1f}%\n"
             f"リセット: {reset_txt}"
         )

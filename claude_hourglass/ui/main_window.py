@@ -97,8 +97,8 @@ class _SummaryBar(QWidget):
                 return C["accent_orange"]
             return C["accent_blue"]
 
-        h5 = snap.five_hour_used_pct or 0.0
-        h7 = snap.seven_day_used_pct or 0.0
+        h5 = snap.effective_five_hour_pct
+        h7 = snap.effective_seven_day_pct
         cost = snap.total_cost_usd
 
         self._cards["5h_pct"][0].setText(f"{h5:.1f}%")

@@ -8,11 +8,18 @@ _DEFAULT_DIR = Path.home() / ".claude_hourglass"
 DEFAULTS: dict[str, Any] = {
     "db_path": str(_DEFAULT_DIR / "usage.sqlite"),
     "latest_json_path": str(_DEFAULT_DIR / "latest_usage.json"),
+    "latest_statusline_raw_path": str(_DEFAULT_DIR / "latest_statusline_raw.json"),
+    "latest_official_ui_path": str(_DEFAULT_DIR / "latest_official_ui.json"),
     "poll_interval_sec": 30,
     "theme": "dark",
     "window_opacity": 0.95,
     # 起動時ミニパネル表示 (True = 表示する)
     "show_startup_panel": True,
+    # ローカル受信 HTTP サーバー
+    "receiver_enabled": True,
+    "receiver_port": 43871,
+    # alt source として表示する最大経過秒数 (デフォルト 10分)
+    "alt_max_age_secs": 600,
     # 自動起動の真の状態は startup.is_startup_enabled() で読むこと (レジストリが正)
 }
 
@@ -65,3 +72,11 @@ def db_path() -> Path:
 
 def latest_json_path() -> Path:
     return Path(get("latest_json_path"))
+
+
+def statusline_raw_path() -> Path:
+    return Path(get("latest_statusline_raw_path"))
+
+
+def official_ui_path() -> Path:
+    return Path(get("latest_official_ui_path"))

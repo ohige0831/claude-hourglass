@@ -17,6 +17,24 @@ def _normalize_ts(val) -> Optional[str]:
     return str(val)
 
 
+def _to_int(val) -> Optional[int]:
+    """スカラー値を int に変換する。dict/list などは None を返す。"""
+    if val is None:
+        return None
+    if isinstance(val, bool):
+        return int(val)
+    if isinstance(val, int):
+        return val
+    if isinstance(val, float):
+        return int(val)
+    if isinstance(val, str):
+        try:
+            return int(float(val))
+        except Exception:
+            return None
+    return None  # dict / list → 変換不可
+
+
 @dataclass
 class UsageSnapshot:
     captured_at: str
@@ -31,6 +49,13 @@ class UsageSnapshot:
     version: Optional[str] = None
     raw_json: Optional[str] = None
     id: Optional[int] = field(default=None, compare=False)
+    # multi-source fields
+    source: Optional[str] = None
+    source_label: Optional[str] = None
+    alt_source: Optional[str] = None
+    alt_source_label: Optional[str] = None
+    alt_five_hour_pct: Optional[float] = None
+    alt_seven_day_pct: Optional[float] = None
 
     @classmethod
     def from_status_json(cls, data: dict) -> "UsageSnapshot":
@@ -50,10 +75,54 @@ class UsageSnapshot:
             seven_day_used_pct=seven_day.get("used_percentage"),
             seven_day_resets_at=_normalize_ts(seven_day.get("resets_at")),
             total_cost_usd=cost.get("total_cost_usd"),
-            context_window_current=ctx.get("current_usage"),
+            context_window_current=_to_int(ctx.get("current_usage")),
             version=data.get("version"),
             raw_json=json.dumps(data, ensure_ascii=False),
+            source=data.get("source"),
+            source_label=data.get("source_label"),
+            alt_source=data.get("alt_source"),
+            alt_source_label=data.get("alt_source_label"),
+            alt_five_hour_pct=data.get("alt_five_hour_pct"),
+            alt_seven_day_pct=data.get("alt_seven_day_pct"),
         )
+
+    # ------------------------------------------------------------------
+    # Expiry-aware effective values (UI 表示用)
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _resets_at_expired(resets_at: Optional[str]) -> bool:
+        """resets_at が現在時刻以前なら True（枠がリセット済み）。"""
+        if not resets_at:
+            return False
+        try:
+            for fmt in ("%Y-%m-%dT%H:%M:%S.%fZ", "%Y-%m-%dT%H:%M:%SZ",
+                        "%Y-%m-%dT%H:%M:%S.%f", "%Y-%m-%dT%H:%M:%S"):
+                try:
+                    dt = datetime.strptime(resets_at, fmt).replace(tzinfo=timezone.utc)
+                    return dt <= datetime.now(timezone.utc)
+                except ValueError:
+                    pass
+        except Exception:
+            pass
+        return False
+
+    @property
+    def five_hour_expired(self) -> bool:
+        return self._resets_at_expired(self.five_hour_resets_at)
+
+    @property
+    def seven_day_expired(self) -> bool:
+        return self._resets_at_expired(self.seven_day_resets_at)
+
+    @property
+    def effective_five_hour_pct(self) -> float:
+        """リセット済みなら 0.0、そうでなければ raw 値。"""
+        return 0.0 if self.five_hour_expired else (self.five_hour_used_pct or 0.0)
+
+    @property
+    def effective_seven_day_pct(self) -> float:
+        return 0.0 if self.seven_day_expired else (self.seven_day_used_pct or 0.0)
 
     def to_dict(self) -> dict:
         return {

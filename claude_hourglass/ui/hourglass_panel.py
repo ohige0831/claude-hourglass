@@ -11,6 +11,7 @@ from PySide6.QtWidgets import (
 from .theme import C, mono_font, ui_font, qc
 from .widgets.hourglass_widget import HourglassWidget
 from ..models import UsageSnapshot
+from ..sources import SOURCE_LABELS_JA
 
 
 class _Separator(QFrame):
@@ -174,8 +175,8 @@ class HourglassPanel(QWidget):
             self._hourglass.set_usage(0.0, 0.0)
             return
 
-        h5 = snap.five_hour_used_pct or 0.0
-        h7 = snap.seven_day_used_pct or 0.0
+        h5 = snap.effective_five_hour_pct
+        h7 = snap.effective_seven_day_pct
         self._hourglass.set_usage(h5, h7)
 
         def pct_color(p: float) -> str:
@@ -207,7 +208,10 @@ class HourglassPanel(QWidget):
                 tzinfo=timezone.utc
             )
             local = ts.astimezone()
-            self._updated_lbl.setText(f"最終更新: {local.strftime('%H:%M:%S')}")
+            note = " · 次回利用時に更新" if snap.five_hour_expired else ""
+            src_ja = SOURCE_LABELS_JA.get(snap.source or "", snap.source_label or "")
+            source_txt = f"  [{src_ja}]" if src_ja else ""
+            self._updated_lbl.setText(f"最終更新: {local.strftime('%H:%M:%S')}{note}{source_txt}")
         except Exception:
             self._updated_lbl.setText(f"最終更新: {snap.captured_at}")
 

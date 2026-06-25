@@ -1,4 +1,5 @@
 from __future__ import annotations
+import json
 import sqlite3
 from contextlib import contextmanager
 from datetime import datetime, timedelta
@@ -6,6 +7,18 @@ from pathlib import Path
 from typing import Generator, Optional
 
 from .models import UsageSnapshot
+
+
+def _sql_safe(val):
+    """SQLite が受け付けない型 (dict/list 等) を TEXT に変換する。"""
+    if val is None or isinstance(val, (int, float, str, bytes)):
+        return val
+    if isinstance(val, bool):
+        return int(val)
+    try:
+        return json.dumps(val, ensure_ascii=False)
+    except Exception:
+        return str(val)
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS usage_snapshots (
@@ -56,7 +69,7 @@ def insert(db_path: Path, snapshot: UsageSnapshot) -> int:
         VALUES (?,?,?,?,?,?,?,?,?,?,?)
     """
     with _conn(db_path) as con:
-        cur = con.execute(sql, (
+        cur = con.execute(sql, tuple(_sql_safe(v) for v in (
             snapshot.captured_at,
             snapshot.session_id,
             snapshot.model_display_name,
@@ -68,7 +81,7 @@ def insert(db_path: Path, snapshot: UsageSnapshot) -> int:
             snapshot.context_window_current,
             snapshot.version,
             snapshot.raw_json,
-        ))
+        )))
         return cur.lastrowid  # type: ignore[return-value]
 
 
