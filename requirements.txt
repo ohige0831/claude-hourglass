@@ -1,2 +1,4 @@
 PySide6>=6.6.0
 pyqtgraph>=0.13.3
+# Optional — required for the built-in WebView collector (公式UI連携 WebView):
+# pip install PySide6-WebEngine

@@ -20,6 +20,11 @@ DEFAULTS: dict[str, Any] = {
     "receiver_port": 43871,
     # alt source として表示する最大経過秒数 (デフォルト 10分)
     "alt_max_age_secs": 600,
+    # 公式UI WebView 収集
+    "official_webview_enabled": False,
+    "official_webview_interval_secs": 60,
+    "official_webview_profile_dir": str(_DEFAULT_DIR / "webview_profile"),
+    "official_usage_url": "https://claude.ai/settings/usage",
     # 自動起動の真の状態は startup.is_startup_enabled() で読むこと (レジストリが正)
 }
 
@@ -80,3 +85,11 @@ def statusline_raw_path() -> Path:
 
 def official_ui_path() -> Path:
     return Path(get("latest_official_ui_path"))
+
+
+def webview_status_path() -> Path:
+    return _DEFAULT_DIR / "official_webview_status.json"
+
+
+def webview_profile_dir() -> Path:
+    return Path(get("official_webview_profile_dir"))

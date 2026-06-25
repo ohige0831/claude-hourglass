@@ -1,16 +1,18 @@
 from __future__ import annotations
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Optional
 
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
     QFrame, QHBoxLayout, QLabel, QPushButton,
-    QVBoxLayout, QWidget,
+    QSizePolicy, QVBoxLayout, QWidget,
 )
 
 from ..theme import C, mono_font, ui_font
 from .hourglass_widget import HourglassWidget
 from ...models import UsageSnapshot
+from ...official_webview_collector import STATUS_LABELS_JA, read_webview_status
 from ...sources import SOURCE_LABELS_JA
 
 
@@ -34,9 +36,10 @@ class _Card(QWidget):
             "  border-radius: 6px;"
             "}"
         )
+        self.setMinimumWidth(280)
         self._inner = QVBoxLayout(self)
-        self._inner.setContentsMargins(14, 10, 14, 10)
-        self._inner.setSpacing(5)
+        self._inner.setContentsMargins(12, 7, 12, 7)
+        self._inner.setSpacing(4)
 
         heading = QLabel(title)
         heading.setFont(ui_font(9))
@@ -51,14 +54,16 @@ class _Card(QWidget):
 
     def add_row(self, label: str, font_size: int = 11) -> QLabel:
         row = QHBoxLayout()
-        row.setSpacing(8)
+        row.setSpacing(10)
         lbl = QLabel(label)
         lbl.setFont(ui_font(9))
         lbl.setStyleSheet(f"color: {C['text_muted']}; background: transparent; border: none;")
-        lbl.setFixedWidth(90)
+        lbl.setFixedWidth(76)
         val = QLabel("—")
         val.setFont(mono_font(font_size))
         val.setStyleSheet(f"color: {C['text_primary']}; background: transparent; border: none;")
+        val.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
+        val.setMinimumWidth(60)
         row.addWidget(lbl)
         row.addWidget(val, 1)
         self._inner.addLayout(row)
@@ -77,8 +82,11 @@ def _pct_color(p: float) -> str:
     return C["text_primary"]
 
 
+_MAX_RESET_SECS = 8 * 24 * 3600  # Claude の制限窓はこれより長くならない
+
+
 def _fmt_countdown(resets_at: Optional[str]) -> str:
-    """'Xh Ym' remaining, or 'リセット済み'."""
+    """'Xh Ym' remaining, or 'リセット済み'. null や異常値は '—'."""
     if not resets_at:
         return "—"
     try:
@@ -88,6 +96,8 @@ def _fmt_countdown(resets_at: Optional[str]) -> str:
         secs = int((dt - datetime.now(timezone.utc)).total_seconds())
         if secs <= 0:
             return "リセット済み"
+        if secs > _MAX_RESET_SECS:  # エポック0由来の巨大値を除外
+            return "—"
         h, rem = divmod(secs, 3600)
         return f"{h}h {rem // 60:02d}m"
     except Exception:
@@ -95,12 +105,16 @@ def _fmt_countdown(resets_at: Optional[str]) -> str:
 
 
 def _fmt_local_time(resets_at: Optional[str]) -> str:
-    """Local time string 'MM/DD HH:MM'."""
+    """Local JST time string 'MM/DD HH:MM'. null や異常値は '—'."""
     if not resets_at:
         return "—"
     try:
         dt = _parse_utc(resets_at)
         if dt is None:
+            return "—"
+        secs = (dt - datetime.now(timezone.utc)).total_seconds()
+        # 8日超の未来 or 7日超の過去 (epoch 0 ゴミ値など) は表示しない
+        if secs > _MAX_RESET_SECS or secs < -7 * 24 * 3600:
             return "—"
         return dt.astimezone().strftime("%m/%d %H:%M")
     except Exception:
@@ -136,28 +150,34 @@ def _parse_utc(ts) -> Optional[datetime]:
 class CurrentStatusTab(QWidget):
     """「現在」タブ — 大きな砂時計 + 現在の使用状況カード。"""
 
-    def __init__(self, on_refresh=None, parent: Optional[QWidget] = None):
+    def __init__(self, on_refresh=None, on_open_login=None, parent: Optional[QWidget] = None):
         super().__init__(parent)
         self._on_refresh = on_refresh
+        self._on_open_login = on_open_login
+        self._webview_status_path: Optional[object] = None
         self._build()
 
     # ------------------------------------------------------------------
 
     def _build(self) -> None:
         root = QVBoxLayout(self)
-        root.setContentsMargins(16, 16, 16, 16)
-        root.setSpacing(12)
+        root.setContentsMargins(12, 12, 12, 12)
+        root.setSpacing(10)
 
         content = QHBoxLayout()
-        content.setSpacing(24)
+        content.setSpacing(20)
 
         # ---- Left: large hourglass ----
         self._hourglass = _LargeHourglassWidget(self)
         content.addWidget(self._hourglass, 0, Qt.AlignTop)
 
-        # ---- Right: stat cards + refresh button ----
-        right = QVBoxLayout()
-        right.setSpacing(8)
+        # ---- Right: stat cards in a container widget with minimum width ----
+        right_container = QWidget()
+        right_container.setMinimumWidth(340)
+        right_container.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
+        right = QVBoxLayout(right_container)
+        right.setContentsMargins(0, 0, 0, 0)
+        right.setSpacing(6)
 
         # 5時間制限
         card5 = _Card("5時間制限")
@@ -177,21 +197,29 @@ class CurrentStatusTab(QWidget):
         card_other = _Card("その他")
         self._v_cost = card_other.add_row("累計コスト", 11)
         self._v_model = card_other.add_row("モデル", 10)
+        self._v_model.setWordWrap(True)
         self._v_source = card_other.add_row("ソース", 10)
+        self._v_source.setWordWrap(True)
         self._v_updated = card_other.add_row("最終更新", 10)
         right.addWidget(card_other)
 
+        # 公式UI連携
+        card_webview = _Card("公式UI連携 (WebView)")
+        self._v_wv_status = card_webview.add_row("状態", 10)
+        self._v_wv_updated = card_webview.add_row("最終取得", 10)
+        wv_btn_row = QHBoxLayout()
+        self._login_btn = QPushButton("ログインを開く")
+        self._login_btn.setFont(ui_font(9))
+        self._login_btn.setVisible(False)
+        self._login_btn.clicked.connect(self._do_open_login)
+        wv_btn_row.addStretch()
+        wv_btn_row.addWidget(self._login_btn)
+        card_webview._inner.addLayout(wv_btn_row)
+        right.addWidget(card_webview)
+
         right.addStretch()
 
-        btn_row = QHBoxLayout()
-        btn_row.addStretch()
-        refresh_btn = QPushButton("更新")
-        refresh_btn.setFont(ui_font(10))
-        refresh_btn.clicked.connect(self._do_refresh)
-        btn_row.addWidget(refresh_btn)
-        right.addLayout(btn_row)
-
-        content.addLayout(right, 1)
+        content.addWidget(right_container, 1)
         root.addLayout(content, 1)
 
     # ------------------------------------------------------------------
@@ -199,6 +227,35 @@ class CurrentStatusTab(QWidget):
     def _do_refresh(self) -> None:
         if self._on_refresh:
             self._on_refresh()
+
+    def _do_open_login(self) -> None:
+        if self._on_open_login:
+            self._on_open_login()
+
+    def set_webview_status_path(self, path) -> None:
+        """ステータスファイルのパスを設定する (main.py から呼ぶ)。"""
+        self._webview_status_path = path
+
+    def update_webview_status(self) -> None:
+        """ステータスファイルを読み取って UI を更新する。"""
+        if self._webview_status_path is None:
+            return
+        info = read_webview_status(Path(str(self._webview_status_path)))
+        status = info.get("status", "idle")
+        label = STATUS_LABELS_JA.get(status, status)
+        self._v_wv_status.setText(label)
+
+        updated = info.get("updated_at")
+        if updated:
+            try:
+                dt = _parse_utc(updated)
+                self._v_wv_updated.setText(dt.astimezone().strftime("%H:%M:%S") if dt else updated)
+            except Exception:
+                self._v_wv_updated.setText(updated)
+        else:
+            self._v_wv_updated.setText("—")
+
+        self._login_btn.setVisible(status == "login_required")
 
     def update_snapshot(self, snap: Optional[UsageSnapshot]) -> None:
         if snap is None:
@@ -259,3 +316,5 @@ class CurrentStatusTab(QWidget):
                 self._v_updated.setText(snap.captured_at)
         except Exception:
             self._v_updated.setText(snap.captured_at or "—")
+
+        self.update_webview_status()

@@ -12,12 +12,11 @@ from __future__ import annotations
 import json
 import socketserver
 import threading
-from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 from typing import Optional
 
-from .sources import SOURCE_LABELS, build_latest_json
+from .official_ingest import ingest_official_usage
 
 
 class _ThreadingHTTPServer(socketserver.ThreadingMixIn, HTTPServer):
@@ -69,19 +68,12 @@ def _make_handler(
                 self._send_json(400, {"error": str(exc)})
                 return
 
-            now_iso = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-            data["source"] = "official_ui"
-            data["source_label"] = SOURCE_LABELS.get("official_ui", "Official UI")
-            data["saved_at"] = now_iso
-            data.setdefault("captured_at", now_iso)
-
             try:
-                official_ui_path.parent.mkdir(parents=True, exist_ok=True)
-                official_ui_path.write_text(
-                    json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8"
+                ingest_official_usage(
+                    data, official_ui_path, statusline_raw_path, latest_path,
+                    alt_max_age_secs=alt_max_age_secs,
+                    source_detail="receiver",
                 )
-                build_latest_json(statusline_raw_path, official_ui_path, latest_path,
-                                  alt_max_age_secs=alt_max_age_secs)
             except Exception as exc:
                 self._send_json(500, {"error": str(exc)})
                 return

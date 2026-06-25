@@ -1,19 +1,22 @@
 from __future__ import annotations
+import json
+import logging
 from pathlib import Path
 from typing import Optional
+
+_log = logging.getLogger(__name__)
 
 from PySide6.QtCore import Qt, QTimer
 from PySide6.QtGui import QCloseEvent
 from PySide6.QtWidgets import (
     QHBoxLayout, QLabel, QMainWindow, QPushButton,
-    QSizePolicy, QTabWidget, QVBoxLayout, QWidget,
+    QScrollArea, QSizePolicy, QTabWidget, QVBoxLayout, QWidget,
 )
 
 from .theme import C, mono_font, ui_font
 from .widgets.current_status_tab import CurrentStatusTab
 from .widgets.usage_chart import BarChart, SessionChart, TimeSeriesChart
-from .. import database
-from ..config import db_path
+from .. import config, database
 from ..resources import app_icon
 from ..models import UsageSnapshot
 
@@ -55,18 +58,22 @@ class _SummaryBar(QWidget):
             f"background: {C['bg_secondary']}; border-bottom: 1px solid {C['border_subtle']};"
         )
         lay = QHBoxLayout(self)
-        lay.setContentsMargins(20, 10, 20, 10)
-        lay.setSpacing(0)
+        lay.setContentsMargins(24, 10, 24, 10)
+        lay.setSpacing(20)
 
         self._cards: dict[str, tuple[QLabel, QLabel]] = {}
+        # (stretch, min_width) — pct/cost are compact; model can expand
+        _spec = {"5h_pct": (1, 120), "7d_pct": (1, 120), "cost": (1, 110), "model": (2, 160)}
         for key, label in [
             ("5h_pct", "5時間使用率"),
             ("7d_pct", "7日使用率"),
             ("cost", "累計コスト"),
             ("model", "モデル"),
         ]:
+            stretch, min_w = _spec[key]
             card = QWidget()
             card.setStyleSheet("background: transparent;")
+            card.setMinimumWidth(min_w)
             card_lay = QVBoxLayout(card)
             card_lay.setContentsMargins(0, 0, 0, 0)
             card_lay.setSpacing(2)
@@ -74,6 +81,7 @@ class _SummaryBar(QWidget):
             val_lbl = QLabel("—")
             val_lbl.setFont(mono_font(15, bold=True))
             val_lbl.setStyleSheet(f"color: {C['text_primary']}; background: transparent;")
+            val_lbl.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
             card_lay.addWidget(val_lbl)
 
             sub_lbl = QLabel(label)
@@ -82,9 +90,9 @@ class _SummaryBar(QWidget):
             card_lay.addWidget(sub_lbl)
 
             self._cards[key] = (val_lbl, sub_lbl)
+            lay.addWidget(card, stretch)
 
-            lay.addWidget(card)
-            lay.addStretch()
+        lay.addStretch(1)  # push cards left on very wide windows
 
     def update(self, snap: Optional[UsageSnapshot]) -> None:  # type: ignore[override]
         if snap is None:
@@ -119,13 +127,14 @@ class _SummaryBar(QWidget):
 
 
 class MainWindow(QMainWindow):
-    def __init__(self, on_settings=None, parent=None):
+    def __init__(self, on_settings=None, on_open_login=None, parent=None):
         super().__init__(parent)
         self._on_settings = on_settings
+        self._on_open_login = on_open_login
         self.setWindowTitle("Claude Hourglass")
         self.setWindowIcon(app_icon())
-        self.setMinimumSize(780, 560)
-        self.resize(900, 640)
+        self.setMinimumSize(960, 580)
+        self.resize(1060, 660)
 
         self._header = _Header()
         self._summary = _SummaryBar()
@@ -158,8 +167,8 @@ class MainWindow(QMainWindow):
         content = QWidget()
         content.setStyleSheet(f"background: {C['bg_primary']};")
         content_lay = QVBoxLayout(content)
-        content_lay.setContentsMargins(16, 16, 16, 16)
-        content_lay.setSpacing(8)
+        content_lay.setContentsMargins(8, 8, 8, 8)
+        content_lay.setSpacing(4)
 
         # Tab bar
         self._tabs = QTabWidget()
@@ -169,9 +178,23 @@ class MainWindow(QMainWindow):
         tab_current = QWidget()
         tab_current.setStyleSheet(f"background: {C['bg_secondary']};")
         tc_lay = QVBoxLayout(tab_current)
-        tc_lay.setContentsMargins(12, 12, 12, 4)
-        self._current_tab = CurrentStatusTab(on_refresh=self.refresh_charts)
-        tc_lay.addWidget(self._current_tab)
+        tc_lay.setContentsMargins(0, 0, 0, 0)
+        tc_lay.setSpacing(0)
+
+        self._current_tab = CurrentStatusTab(
+            on_refresh=self.refresh_charts,
+            on_open_login=self._on_open_login,
+        )
+
+        _current_scroll = QScrollArea()
+        _current_scroll.setWidget(self._current_tab)
+        _current_scroll.setWidgetResizable(True)
+        _current_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        _current_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        _current_scroll.setStyleSheet(
+            f"QScrollArea {{ border: none; background: {C['bg_secondary']}; }}"
+        )
+        tc_lay.addWidget(_current_scroll)
         self._tabs.addTab(tab_current, "現在")
 
         # ---------- Tab: 5時間制限 ----------
@@ -245,19 +268,58 @@ class MainWindow(QMainWindow):
 
     # ------------------------------------------------------------------
 
+    def _load_latest_snapshot(self) -> Optional[UsageSnapshot]:
+        """latest_usage.json を優先して読み、なければ DB から取得する。"""
+        snap: Optional[UsageSnapshot] = None
+
+        json_path = config.latest_json_path()
+        if json_path.exists():
+            try:
+                data = json.loads(json_path.read_text(encoding="utf-8"))
+                snap = UsageSnapshot.from_status_json(data)
+                rl = data.get("rate_limits", {})
+                fh = rl.get("five_hour") or {}
+                sd = rl.get("seven_day") or {}
+                _log.debug(
+                    "source=%s source_detail=%s "
+                    "five_hour_used_percentage=%s seven_day_used_percentage=%s "
+                    "five_hour_resets_at=%s seven_day_resets_at=%s chosen_source=json",
+                    data.get("source"), data.get("source_detail", ""),
+                    fh.get("used_percentage"), sd.get("used_percentage"),
+                    fh.get("resets_at"), sd.get("resets_at"),
+                )
+            except Exception as exc:
+                _log.debug("JSON read error: %s", exc)
+
+        if snap is None:
+            db = config.db_path()
+            if db.exists():
+                snap = database.latest(db)
+                if snap:
+                    _log.debug(
+                        "five_hour_used_percentage=%s seven_day_used_percentage=%s "
+                        "five_hour_resets_at=%s seven_day_resets_at=%s chosen_source=db",
+                        snap.five_hour_used_pct, snap.seven_day_used_pct,
+                        snap.five_hour_resets_at, snap.seven_day_resets_at,
+                    )
+
+        return snap
+
     def refresh_charts(self) -> None:
-        path = db_path()
-        if not path.exists():
-            self._header.set_status("データなし — サンプルデータを生成してください")
-            return
-
-        snapshots = database.recent(path, days=30)
-        latest = database.latest(path)
-
+        # 現在状態: latest_usage.json 優先、なければ DB
+        latest = self._load_latest_snapshot()
         self._summary.update(latest)
-
         if self._current_tab:
             self._current_tab.update_snapshot(latest)
+
+        # 時系列チャート: 常に DB から
+        db = config.db_path()
+        if not db.exists():
+            if latest is None:
+                self._header.set_status("データなし — サンプルデータを生成してください")
+            return
+
+        snapshots = database.recent(db, days=30)
 
         if self._chart_5h:
             self._chart_5h.load(snapshots, "five_hour_used_pct")

@@ -21,8 +21,9 @@ from ..startup import (
 
 
 class SettingsDialog(QDialog):
-    def __init__(self, parent=None):
+    def __init__(self, parent=None, on_open_login=None):
         super().__init__(parent)
+        self._on_open_login = on_open_login
         self.setWindowTitle("設定 — Claude Hourglass")
         self.setWindowIcon(app_icon())
         self.setMinimumWidth(500)
@@ -108,6 +109,47 @@ class SettingsDialog(QDialog):
 
         lay.addWidget(startup_group)
 
+        # --- 公式UI連携 (WebView) ---
+        wv_group = QGroupBox("公式UI連携 (WebView)")
+        wv_lay = QVBoxLayout(wv_group)
+        wv_lay.setSpacing(8)
+
+        self._wv_check = QCheckBox("QtWebEngine で使用量を定期取得する")
+        self._wv_check.setFont(ui_font(10))
+        wv_lay.addWidget(self._wv_check)
+
+        wv_form = QFormLayout()
+        wv_form.setSpacing(6)
+
+        self._wv_interval_spin = QSpinBox()
+        self._wv_interval_spin.setRange(30, 3600)
+        self._wv_interval_spin.setSuffix(" 秒")
+        self._wv_interval_spin.setFont(ui_font(10))
+        wv_form.addRow("取得間隔:", self._wv_interval_spin)
+        wv_lay.addLayout(wv_form)
+
+        wv_btn_row = QHBoxLayout()
+        wv_btn_row.setSpacing(8)
+        self._wv_login_btn = QPushButton("ログインウィンドウを開く")
+        self._wv_login_btn.setFont(ui_font(10))
+        self._wv_login_btn.clicked.connect(self._open_login_window)
+        wv_btn_row.addWidget(self._wv_login_btn)
+        wv_btn_row.addStretch()
+        wv_lay.addLayout(wv_btn_row)
+
+        self._wv_note = QLabel(
+            "PySide6-WebEngine がインストールされていない場合は無効になります。\n"
+            "pip install PySide6-WebEngine"
+        )
+        self._wv_note.setFont(ui_font(9))
+        self._wv_note.setWordWrap(True)
+        self._wv_note.setStyleSheet(
+            f"color: {C['text_muted']}; background: transparent;"
+        )
+        wv_lay.addWidget(self._wv_note)
+
+        lay.addWidget(wv_group)
+
         # --- ダイアログボタン ---
         buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
         buttons.accepted.connect(self._save_and_accept)
@@ -130,6 +172,11 @@ class SettingsDialog(QDialog):
             self._startup_check.setChecked(enabled)
             self._update_startup_info(enabled)
 
+        self._wv_check.setChecked(bool(config.get("official_webview_enabled")))
+        self._wv_interval_spin.setValue(int(config.get("official_webview_interval_secs") or 60))
+
+        self._wv_login_btn.setEnabled(self._on_open_login is not None)
+
     def _update_startup_info(self, enabled: bool) -> None:
         """ランチャーパスの案内テキストを更新する。"""
         if self._startup_info is None:
@@ -148,6 +195,8 @@ class SettingsDialog(QDialog):
         config.set("db_path", self._db_edit.text().strip())
         config.set("latest_json_path", self._json_edit.text().strip())
         config.set("poll_interval_sec", self._interval_spin.value())
+        config.set("official_webview_enabled", self._wv_check.isChecked())
+        config.set("official_webview_interval_secs", self._wv_interval_spin.value())
 
         if _IS_WINDOWS and not self._apply_startup():
             return  # エラー発生時はダイアログを閉じない
@@ -181,6 +230,15 @@ class SettingsDialog(QDialog):
             # チェックボックスを実際の状態に戻す
             self._startup_check.setChecked(currently_enabled)
             return False
+
+    def _open_login_window(self) -> None:
+        if self._on_open_login is None:
+            return
+        try:
+            self._on_open_login()
+        except Exception as exc:
+            from PySide6.QtWidgets import QMessageBox
+            QMessageBox.warning(self, "ログインウィンドウエラー", str(exc))
 
     # ------------------------------------------------------------------
     # File pickers

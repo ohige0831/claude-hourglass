@@ -235,12 +235,14 @@ class HourglassPanel(QWidget):
         QTimer.singleShot(duration_ms, self.hide)
 
 
+_MAX_RESET_SECS = 8 * 24 * 3600  # Claude の制限窓はこれより長くならない
+
+
 def _format_reset(resets_at) -> str:
-    """resets_at を '4h 23m (17:00)' 形式に変換する。int/float はエポック秒として扱う。"""
+    """resets_at を '4h 23m (17:00)' 形式に変換する。null や異常値は '—'。"""
     if resets_at is None:
         return "—"
     try:
-        # Unix epoch int/float → datetime
         if isinstance(resets_at, (int, float)):
             dt = datetime.fromtimestamp(int(resets_at), tz=timezone.utc)
         else:
@@ -253,13 +255,15 @@ def _format_reset(resets_at) -> str:
                 except ValueError:
                     pass
             if dt is None:
-                return str(resets_at)
+                return "—"
 
         total_secs = int((dt - datetime.now(timezone.utc)).total_seconds())
         if total_secs <= 0:
             return "リセット済み"
+        if total_secs > _MAX_RESET_SECS:
+            return "—"
         hours, rem = divmod(total_secs, 3600)
         local = dt.astimezone()
         return f"{hours}h {rem // 60:02d}m ({local.strftime('%H:%M')})"
     except Exception:
-        return str(resets_at)
+        return "—"
