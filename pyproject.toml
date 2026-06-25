@@ -1,0 +1,20 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.backends.legacy:build"
+
+[project]
+name = "claude-hourglass"
+version = "0.1.0"
+description = "Claude Code usage visualizer for Windows system tray"
+requires-python = ">=3.10"
+dependencies = [
+    "PySide6>=6.6.0",
+    "pyqtgraph>=0.13.3",
+]
+
+[project.scripts]
+claude-hourglass = "claude_hourglass.main:main"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["claude_hourglass*", "statusline_hook*"]
