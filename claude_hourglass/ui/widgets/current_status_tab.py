@@ -106,7 +106,15 @@ def _fmt_local_time(resets_at: Optional[str]) -> str:
         return "—"
 
 
-def _parse_utc(ts: str) -> Optional[datetime]:
+def _parse_utc(ts) -> Optional[datetime]:
+    """ISO 文字列またはエポック秒 (int/float) を UTC datetime に変換する。"""
+    if ts is None:
+        return None
+    if isinstance(ts, (int, float)):
+        try:
+            return datetime.fromtimestamp(int(ts), tz=timezone.utc)
+        except Exception:
+            return None
     for fmt in (
         "%Y-%m-%dT%H:%M:%S.%fZ",
         "%Y-%m-%dT%H:%M:%SZ",
@@ -114,7 +122,7 @@ def _parse_utc(ts: str) -> Optional[datetime]:
         "%Y-%m-%dT%H:%M:%S",
     ):
         try:
-            return datetime.strptime(ts, fmt).replace(tzinfo=timezone.utc)
+            return datetime.strptime(str(ts), fmt).replace(tzinfo=timezone.utc)
         except ValueError:
             pass
     return None

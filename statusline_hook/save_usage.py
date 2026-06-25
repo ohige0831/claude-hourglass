@@ -109,6 +109,18 @@ CREATE INDEX IF NOT EXISTS idx_session_id  ON usage_snapshots(session_id);
 """
 
 
+def _ts_to_iso(val) -> Optional[str]:
+    """エポック秒 (int/float) または文字列を ISO UTC 文字列に変換する。"""
+    if val is None:
+        return None
+    if isinstance(val, (int, float)):
+        try:
+            return datetime.fromtimestamp(int(val), tz=timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        except Exception:
+            return None
+    return str(val)
+
+
 def _save_standalone(data: dict, db_path: Path, json_path: Path) -> None:
     import sqlite3
 
@@ -123,13 +135,13 @@ def _save_standalone(data: dict, db_path: Path, json_path: Path) -> None:
     model = data.get("model", {})
 
     row = (
-        data.get("captured_at", datetime.now(timezone.utc).isoformat()),
+        _ts_to_iso(data.get("captured_at")) or datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
         data.get("session_id"),
         model.get("display_name"),
         five_hour.get("used_percentage"),
-        five_hour.get("resets_at"),
+        _ts_to_iso(five_hour.get("resets_at")),
         seven_day.get("used_percentage"),
-        seven_day.get("resets_at"),
+        _ts_to_iso(seven_day.get("resets_at")),
         cost.get("total_cost_usd"),
         ctx.get("current_usage"),
         data.get("version"),

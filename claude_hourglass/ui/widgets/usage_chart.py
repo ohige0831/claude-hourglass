@@ -13,6 +13,9 @@ from ...models import UsageSnapshot
 pg.setConfigOption("background", C["bg_secondary"])
 pg.setConfigOption("foreground", C["text_muted"])
 
+_MSG_SINGLE = "1スナップショットのみ。履歴は Claude Code の利用に応じて蓄積されます。"
+_MSG_EMPTY  = "データなし — Claude Code を使うと自動で蓄積されます。"
+
 
 def _parse_dt(ts: str) -> Optional[float]:
     for fmt in ("%Y-%m-%dT%H:%M:%S.%fZ", "%Y-%m-%dT%H:%M:%SZ",
@@ -22,6 +25,15 @@ def _parse_dt(ts: str) -> Optional[float]:
         except ValueError:
             pass
     return None
+
+
+def _msg_label(parent: QWidget) -> QLabel:
+    lbl = QLabel("", parent)
+    lbl.setFont(ui_font(9))
+    lbl.setStyleSheet(f"color: {C['text_muted']}; background: transparent;")
+    lbl.setAlignment(Qt.AlignCenter)
+    lbl.setVisible(False)
+    return lbl
 
 
 class TimeSeriesChart(QWidget):
@@ -38,11 +50,13 @@ class TimeSeriesChart(QWidget):
         self._title = title
         self._plot: Optional[pg.PlotWidget] = None
         self._curve: Optional[pg.PlotDataItem] = None
+        self._scatter: Optional[pg.ScatterPlotItem] = None
+        self._hline: Optional[pg.InfiniteLine] = None
+        self._msg_lbl: Optional[QLabel] = None
         self._build()
 
     def _build(self) -> None:
         layout = QVBoxLayout(self)
-        # 下に余白を持たせてラベルがウィジェット境界でクリップされないようにする
         layout.setContentsMargins(0, 0, 0, 10)
         layout.setSpacing(4)
 
@@ -59,22 +73,29 @@ class TimeSeriesChart(QWidget):
         self._plot.setYRange(0, 100, padding=0.05)
         self._plot.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
 
-        # Bottom axis: 2行ラベル (MM/DD + HH:mm) が切れないよう高さを確保する
-        #   tickTextHeight: 1行 ≈ 11px、2行 = 22px + 余白 → 36px
-        #   setHeight: AxisItem がレイアウトに要求する総高さ (tick + offset + text)
         bottom = self._plot.getAxis("bottom")
         bottom.setStyle(tickFont=mono_font(8), tickTextHeight=36)
         bottom.setHeight(50)
         bottom.enableAutoSIPrefix(False)
-        bottom.setLabel("")  # SI prefix を出さない; ラベルは setTicks() で設定
+        bottom.setLabel("")
 
         pen = pg.mkPen(color=QColor(self._color), width=2)
         fill_color = QColor(self._color)
         fill_color.setAlpha(60)
-        fill = pg.mkBrush(fill_color)
-        self._curve = self._plot.plot([], [], pen=pen, fillLevel=0, brush=fill)
+        self._curve = self._plot.plot([], [], pen=pen, fillLevel=0, brush=pg.mkBrush(fill_color))
 
         layout.addWidget(self._plot)
+
+        self._msg_lbl = _msg_label(self)
+        layout.addWidget(self._msg_lbl)
+
+    def _clear_extras(self) -> None:
+        if self._scatter is not None:
+            self._plot.removeItem(self._scatter)
+            self._scatter = None
+        if self._hline is not None:
+            self._plot.removeItem(self._hline)
+            self._hline = None
 
     def load(self, snapshots: list[UsageSnapshot], field: str = "five_hour_used_pct") -> None:
         xs, ys = [], []
@@ -85,17 +106,59 @@ class TimeSeriesChart(QWidget):
                 xs.append(ts)
                 ys.append(float(val))
 
-        if self._curve:
-            self._curve.setData(xs, ys)
+        self._clear_extras()
 
-        if self._plot and xs:
-            # Format x-axis as HH:MM
-            ticks = []
-            step = max(1, len(xs) // 6)
-            for i in range(0, len(xs), step):
-                dt = datetime.fromtimestamp(xs[i])
-                ticks.append((xs[i], dt.strftime("%m/%d\n%H:%M")))
-            self._plot.getAxis("bottom").setTicks([ticks])
+        if not xs:
+            self._curve.setData([], [])
+            self._plot.getAxis("bottom").setTicks([[]])
+            self._msg_lbl.setText(_MSG_EMPTY)
+            self._msg_lbl.setVisible(True)
+            return
+
+        if len(xs) == 1:
+            self._curve.setData([], [])
+
+            # Large centered marker
+            dot_color = QColor(self._color)
+            dot_color.setAlpha(220)
+            self._scatter = pg.ScatterPlotItem(
+                x=[xs[0]], y=[ys[0]],
+                symbol="o", size=14,
+                pen=pg.mkPen(color=QColor(self._color), width=2),
+                brush=pg.mkBrush(dot_color),
+            )
+            self._plot.addItem(self._scatter)
+
+            # Subtle horizontal dashed reference line
+            dash_color = QColor(self._color)
+            dash_color.setAlpha(80)
+            self._hline = pg.InfiniteLine(
+                pos=ys[0], angle=0,
+                pen=pg.mkPen(color=dash_color, width=1,
+                             style=Qt.PenStyle.DashLine),
+            )
+            self._plot.addItem(self._hline)
+
+            # Center the single point with ±1 hour padding
+            self._plot.setXRange(xs[0] - 3600, xs[0] + 3600, padding=0)
+
+            dt = datetime.fromtimestamp(xs[0])
+            self._plot.getAxis("bottom").setTicks([[(xs[0], dt.strftime("%m/%d\n%H:%M"))]])
+
+            self._msg_lbl.setText(_MSG_SINGLE)
+            self._msg_lbl.setVisible(True)
+            return
+
+        # 2+ points: normal line + fill
+        self._curve.setData(xs, ys)
+        self._msg_lbl.setVisible(False)
+
+        ticks = []
+        step = max(1, len(xs) // 6)
+        for i in range(0, len(xs), step):
+            dt = datetime.fromtimestamp(xs[i])
+            ticks.append((xs[i], dt.strftime("%m/%d\n%H:%M")))
+        self._plot.getAxis("bottom").setTicks([ticks])
 
 
 class BarChart(QWidget):
@@ -112,6 +175,7 @@ class BarChart(QWidget):
         self._title = title
         self._bars: Optional[pg.BarGraphItem] = None
         self._plot: Optional[pg.PlotWidget] = None
+        self._msg_lbl: Optional[QLabel] = None
         self._build()
 
     def _build(self) -> None:
@@ -136,8 +200,20 @@ class BarChart(QWidget):
         self._plot.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         layout.addWidget(self._plot)
 
+        self._msg_lbl = _msg_label(self)
+        layout.addWidget(self._msg_lbl)
+
+    def _set_bars(self, xs, ys, ticks, brush, pen) -> None:
+        if self._bars is not None:
+            self._plot.removeItem(self._bars)
+        self._bars = pg.BarGraphItem(x=xs, height=ys, width=0.7, brush=brush, pen=pen)
+        self._plot.addItem(self._bars)
+        self._plot.getAxis("bottom").setTicks([ticks])
+        self._msg_lbl.setVisible(len(xs) == 1)
+        if len(xs) == 1:
+            self._msg_lbl.setText(_MSG_SINGLE)
+
     def load_daily(self, snapshots: list[UsageSnapshot]) -> None:
-        """Aggregate snapshots by day (peak five_hour_used_pct per day)."""
         daily: dict[str, float] = {}
         for s in snapshots:
             if s.captured_at and s.five_hour_used_pct is not None:
@@ -145,29 +221,20 @@ class BarChart(QWidget):
                 daily[day] = max(daily.get(day, 0.0), s.five_hour_used_pct)
 
         if not daily:
+            self._msg_lbl.setText(_MSG_EMPTY)
+            self._msg_lbl.setVisible(True)
             return
 
         sorted_days = sorted(daily.keys())
-        xs = list(range(len(sorted_days)))
-        ys = [daily[d] for d in sorted_days]
-        ticks = [(i, d[5:]) for i, d in enumerate(sorted_days)]  # MM-DD
-
-        if self._bars:
-            self._plot.removeItem(self._bars)  # type: ignore[union-attr]
-
-        self._bars = pg.BarGraphItem(
-            x=xs,
-            height=ys,
-            width=0.7,
+        self._set_bars(
+            xs=list(range(len(sorted_days))),
+            ys=[daily[d] for d in sorted_days],
+            ticks=[(i, d[5:]) for i, d in enumerate(sorted_days)],
             brush=QColor(self._color),
             pen=pg.mkPen(color=QColor(self._color).darker(130), width=1),
         )
-        if self._plot:
-            self._plot.addItem(self._bars)
-            self._plot.getAxis("bottom").setTicks([ticks])
 
     def load_weekly(self, snapshots: list[UsageSnapshot]) -> None:
-        """Aggregate by ISO week."""
         weekly: dict[str, float] = {}
         for s in snapshots:
             if s.captured_at and s.five_hour_used_pct is not None:
@@ -179,26 +246,18 @@ class BarChart(QWidget):
                     pass
 
         if not weekly:
+            self._msg_lbl.setText(_MSG_EMPTY)
+            self._msg_lbl.setVisible(True)
             return
 
         sorted_weeks = sorted(weekly.keys())
-        xs = list(range(len(sorted_weeks)))
-        ys = [weekly[w] for w in sorted_weeks]
-        ticks = [(i, w.split("-W")[1] + "週") for i, w in enumerate(sorted_weeks)]
-
-        if self._bars:
-            self._plot.removeItem(self._bars)  # type: ignore[union-attr]
-
-        self._bars = pg.BarGraphItem(
-            x=xs,
-            height=ys,
-            width=0.7,
+        self._set_bars(
+            xs=list(range(len(sorted_weeks))),
+            ys=[weekly[w] for w in sorted_weeks],
+            ticks=[(i, w.split("-W")[1] + "週") for i, w in enumerate(sorted_weeks)],
             brush=QColor(self._color).darker(110),
             pen=pg.mkPen(color=QColor(self._color).darker(140), width=1),
         )
-        if self._plot:
-            self._plot.addItem(self._bars)
-            self._plot.getAxis("bottom").setTicks([ticks])
 
 
 class SessionChart(QWidget):
@@ -208,6 +267,7 @@ class SessionChart(QWidget):
         super().__init__(parent)
         self._bars: Optional[pg.BarGraphItem] = None
         self._plot: Optional[pg.PlotWidget] = None
+        self._msg_lbl: Optional[QLabel] = None
         self._build()
 
     def _build(self) -> None:
@@ -231,8 +291,10 @@ class SessionChart(QWidget):
         self._plot.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         layout.addWidget(self._plot)
 
+        self._msg_lbl = _msg_label(self)
+        layout.addWidget(self._msg_lbl)
+
     def load(self, snapshots: list[UsageSnapshot]) -> None:
-        """Show max cost per session (as proxy for session total)."""
         session_cost: dict[str, float] = {}
         for s in snapshots:
             sid = s.session_id or "unknown"
@@ -240,6 +302,8 @@ class SessionChart(QWidget):
                 session_cost[sid] = max(session_cost.get(sid, 0.0), s.total_cost_usd)
 
         if not session_cost:
+            self._msg_lbl.setText(_MSG_EMPTY)
+            self._msg_lbl.setVisible(True)
             return
 
         items = sorted(session_cost.items(), key=lambda x: x[1], reverse=True)[:20]
@@ -247,16 +311,17 @@ class SessionChart(QWidget):
         ys = [v for _, v in items]
         ticks = [(i, sid[-6:]) for i, (sid, _) in enumerate(items)]
 
-        if self._bars:
-            self._plot.removeItem(self._bars)  # type: ignore[union-attr]
+        if self._bars is not None:
+            self._plot.removeItem(self._bars)
 
         self._bars = pg.BarGraphItem(
-            x=xs,
-            height=ys,
-            width=0.7,
+            x=xs, height=ys, width=0.7,
             brush=QColor(C["accent_blue"]),
             pen=pg.mkPen(color=QColor(C["accent_blue_dim"]), width=1),
         )
-        if self._plot:
-            self._plot.addItem(self._bars)
-            self._plot.getAxis("bottom").setTicks([ticks])
+        self._plot.addItem(self._bars)
+        self._plot.getAxis("bottom").setTicks([ticks])
+
+        self._msg_lbl.setVisible(len(items) == 1)
+        if len(items) == 1:
+            self._msg_lbl.setText(_MSG_SINGLE)

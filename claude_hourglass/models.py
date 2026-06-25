@@ -1,8 +1,20 @@
 from __future__ import annotations
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Optional
 import json
+
+
+def _normalize_ts(val) -> Optional[str]:
+    """Unix epoch int/float → ISO UTC string; str は通過; None はそのまま。"""
+    if val is None:
+        return None
+    if isinstance(val, (int, float)):
+        try:
+            return datetime.fromtimestamp(int(val), tz=timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        except Exception:
+            return None
+    return str(val)
 
 
 @dataclass
@@ -30,13 +42,13 @@ class UsageSnapshot:
         model = data.get("model", {})
 
         return cls(
-            captured_at=data.get("captured_at", datetime.utcnow().isoformat()),
+            captured_at=_normalize_ts(data.get("captured_at")) or datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
             session_id=data.get("session_id"),
             model_display_name=model.get("display_name"),
             five_hour_used_pct=five_hour.get("used_percentage"),
-            five_hour_resets_at=five_hour.get("resets_at"),
+            five_hour_resets_at=_normalize_ts(five_hour.get("resets_at")),
             seven_day_used_pct=seven_day.get("used_percentage"),
-            seven_day_resets_at=seven_day.get("resets_at"),
+            seven_day_resets_at=_normalize_ts(seven_day.get("resets_at")),
             total_cost_usd=cost.get("total_cost_usd"),
             context_window_current=ctx.get("current_usage"),
             version=data.get("version"),

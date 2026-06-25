@@ -42,8 +42,8 @@ class _StatRow(QWidget):
         lay.addWidget(self._lbl)
         lay.addWidget(self._val, 1)
 
-    def set_value(self, text: str, color: str = C["text_primary"]) -> None:
-        self._val.setText(text)
+    def set_value(self, text, color: str = C["text_primary"]) -> None:
+        self._val.setText(str(text))
         self._val.setStyleSheet(f"color: {color}; background: transparent;")
 
 
@@ -231,28 +231,31 @@ class HourglassPanel(QWidget):
         QTimer.singleShot(duration_ms, self.hide)
 
 
-def _format_reset(resets_at: Optional[str]) -> str:
-    if not resets_at:
+def _format_reset(resets_at) -> str:
+    """resets_at を '4h 23m (17:00)' 形式に変換する。int/float はエポック秒として扱う。"""
+    if resets_at is None:
         return "—"
     try:
-        for fmt in ("%Y-%m-%dT%H:%M:%S.%fZ", "%Y-%m-%dT%H:%M:%SZ", "%Y-%m-%dT%H:%M:%S"):
-            try:
-                dt = datetime.strptime(resets_at, fmt).replace(tzinfo=timezone.utc)
-                break
-            except ValueError:
-                pass
+        # Unix epoch int/float → datetime
+        if isinstance(resets_at, (int, float)):
+            dt = datetime.fromtimestamp(int(resets_at), tz=timezone.utc)
         else:
-            return resets_at
+            dt = None
+            for fmt in ("%Y-%m-%dT%H:%M:%S.%fZ", "%Y-%m-%dT%H:%M:%SZ",
+                        "%Y-%m-%dT%H:%M:%S.%f", "%Y-%m-%dT%H:%M:%S"):
+                try:
+                    dt = datetime.strptime(str(resets_at), fmt).replace(tzinfo=timezone.utc)
+                    break
+                except ValueError:
+                    pass
+            if dt is None:
+                return str(resets_at)
 
-        now = datetime.now(timezone.utc)
-        delta = dt - now
-        total_secs = int(delta.total_seconds())
+        total_secs = int((dt - datetime.now(timezone.utc)).total_seconds())
         if total_secs <= 0:
             return "リセット済み"
-
         hours, rem = divmod(total_secs, 3600)
-        minutes = rem // 60
         local = dt.astimezone()
-        return f"{hours}h {minutes:02d}m ({local.strftime('%H:%M')})"
+        return f"{hours}h {rem // 60:02d}m ({local.strftime('%H:%M')})"
     except Exception:
-        return resets_at
+        return str(resets_at)
