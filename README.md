@@ -2,7 +2,19 @@
 
 Claude Code の使用制限を Windows タスクトレイから砂時計風に確認できる常駐アプリ。
 
-![スクリーンショット](Docs/screenshot.png)
+## Screenshots
+
+### Current status
+
+![Current status](Docs/screenshots/current_real.png)
+
+### Usage history
+
+![5-hour usage chart](Docs/screenshots/chart_5h_demo.png)
+
+### Tray panel
+
+![Tray panel](Docs/screenshots/tray_panel_demo.png)
 
 ## 機能
 
