@@ -131,7 +131,15 @@ claude-hourglass/
 │   ├── config.py              # 設定管理
 │   ├── database.py            # SQLite 操作
 │   ├── models.py              # データモデル
+│   ├── resources.py           # リソースパス解決 + draw_hourglass() 描画関数
 │   ├── startup.py             # 自動起動の登録・解除 (VBS生成 + レジストリ)
+│   ├── assets/
+│   │   ├── icon.svg           # SVG ソース (デザイン原本)
+│   │   ├── icon_16.png        # 生成済み PNG (generate_icons.py で再生成可)
+│   │   ├── icon_32.png
+│   │   ├── icon_48.png
+│   │   ├── icon_256.png
+│   │   └── icon.ico           # Windows 用 ICO (16/32/48/256px を内包)
 │   └── ui/
 │       ├── theme.py           # カラーパレット・スタイルシート
 │       ├── hourglass_panel.py # クリックパネル
@@ -143,12 +151,34 @@ claude-hourglass/
 ├── statusline_hook/
 │   └── save_usage.py          # データ受信・保存スクリプト
 ├── scripts/
+│   ├── generate_icons.py      # アイコン PNG/ICO を再生成するスクリプト
 │   └── seed_data.py           # サンプルデータ生成
 ├── Docs/
 │   └── 仕様.md
 ├── requirements.txt
 └── pyproject.toml
 ```
+
+## アイコン資産
+
+アイコンファイルは `claude_hourglass/assets/` に配置されています。
+
+| ファイル | 用途 |
+|----------|------|
+| `icon.svg` | SVG ソース（デザイン原本、再生成の基準） |
+| `icon_16/32/48/256.png` | 各サイズの PNG（コミット済み） |
+| `icon.ico` | Windows 用 ICO（16/32/48/256px を内包） |
+
+Python 環境を変えた場合や SVG を修正した場合は再生成できます:
+
+```bash
+python scripts/generate_icons.py
+```
+
+描画関数 `draw_hourglass()` は `resources.py` で定義しており、
+静的アイコン生成とトレイアイコンの動的描画（使用率による色変化）を共有しています。
+PyInstaller でパッケージ化する場合も `resources.py` の `resource_path()` が
+`sys._MEIPASS` を自動参照するため、パス解決は変更不要です。
 
 ## データの保存先
 

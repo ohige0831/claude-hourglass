@@ -4,6 +4,7 @@ import sys
 from PySide6.QtWidgets import QApplication
 
 from . import config, database
+from .resources import app_icon
 from .ui import theme
 from .ui.hourglass_panel import HourglassPanel
 from .ui.main_window import MainWindow
@@ -19,6 +20,7 @@ def main() -> None:
 
     config.load()
     theme.apply(app)
+    app.setWindowIcon(app_icon())
 
     # Init DB
     db = config.db_path()

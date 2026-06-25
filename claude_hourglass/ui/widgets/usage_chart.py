@@ -55,12 +55,14 @@ class TimeSeriesChart(QWidget):
         self._plot.showGrid(x=False, y=True, alpha=0.15)
         self._plot.setLabel("left", "使用率 %", color=C["text_muted"], size="9pt")
         self._plot.getAxis("left").setStyle(tickFont=mono_font(8))
-        self._plot.getAxis("bottom").setStyle(tickFont=mono_font(8))
         self._plot.setYRange(0, 100, padding=0.05)
         self._plot.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
 
-        # Custom axis formatting for time
-        self._plot.getAxis("bottom").setLabel("時刻", color=C["text_muted"], size="9pt")
+        # Bottom axis: disable SI prefix (prevents "時刻 (x1e+09)" on Unix timestamps)
+        bottom = self._plot.getAxis("bottom")
+        bottom.setStyle(tickFont=mono_font(8))
+        bottom.enableAutoSIPrefix(False)
+        bottom.setLabel("")  # no axis label — tick labels show MM/DD HH:mm
 
         pen = pg.mkPen(color=QColor(self._color), width=2)
         fill_color = QColor(self._color)

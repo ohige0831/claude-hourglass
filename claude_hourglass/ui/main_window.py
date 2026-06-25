@@ -13,6 +13,7 @@ from .theme import C, mono_font, ui_font
 from .widgets.usage_chart import BarChart, SessionChart, TimeSeriesChart
 from .. import database
 from ..config import db_path
+from ..resources import app_icon
 from ..models import UsageSnapshot
 
 
@@ -121,6 +122,7 @@ class MainWindow(QMainWindow):
         super().__init__(parent)
         self._on_settings = on_settings
         self.setWindowTitle("Claude Hourglass")
+        self.setWindowIcon(app_icon())
         self.setMinimumSize(780, 560)
         self.resize(900, 640)
 

@@ -1,84 +1,29 @@
 from __future__ import annotations
 import json
-from pathlib import Path
 from typing import Optional
 
 from PySide6.QtCore import QPoint, QTimer
-from PySide6.QtGui import QColor, QIcon, QPainter, QPixmap, QFont
+from PySide6.QtGui import QIcon
 from PySide6.QtWidgets import QMenu, QSystemTrayIcon
 
 from . import config, database
 from .models import UsageSnapshot
-from .ui.theme import C, qc
+from .resources import draw_hourglass
+from .ui.theme import C
 
 
-def _make_tray_icon(pct: float) -> QIcon:
+def _tray_icon(pct: float) -> QIcon:
     """
-    Render a 32×32 pixel-art hourglass icon.
-    Color shifts from blue → orange → red based on usage percentage.
+    Render a 32×32 tray icon via draw_hourglass().
+    Bottom sand color shifts blue → orange → red with usage level.
     """
-    size = 32
-    px = QPixmap(size, size)
-    px.fill(QColor(0, 0, 0, 0))
-
-    painter = QPainter(px)
-    painter.setRenderHint(QPainter.Antialiasing, False)
-
     if pct < 50:
-        sand_color = QColor(C["accent_blue"])
+        bottom = C["accent_blue"]
     elif pct < 75:
-        sand_color = QColor(C["accent_orange"])
+        bottom = C["accent_orange"]
     else:
-        sand_color = QColor(C["danger"])
-
-    bg = QColor(C["bg_primary"])
-    outline = QColor(C["border"])
-    cream = QColor(C["sand_full"])
-
-    # Hourglass body outline (pixel art, 32×32)
-    # Simplified: two triangles + waist
-    W, H = size, size
-    cx = W // 2
-
-    for y in range(H):
-        if y < H // 2:
-            # top half: taper from W to 4
-            t = y / (H // 2)
-            w = max(4, round(W - t * (W - 4)))
-        else:
-            # bottom half: expand from 4 to W
-            t = (y - H // 2) / (H // 2)
-            w = max(4, round(4 + t * (W - 4)))
-        x0 = cx - w // 2
-        x1 = cx + w // 2
-
-        for x in range(x0, x1 + 1):
-            used = pct / 100.0
-            if y < H // 2:
-                # Top: cream dots for remaining, bg for used
-                fill_boundary = round((H // 2) * (1 - used))
-                color = cream if y < fill_boundary else bg
-            else:
-                # Bottom: sand_color for used, bg for empty
-                fill_boundary = H - round((H // 2) * used)
-                color = sand_color if y >= fill_boundary else bg
-            painter.fillRect(x, y, 1, 1, color)
-
-    # Draw outline dots on hourglass edges
-    for y in range(H):
-        if y < H // 2:
-            t = y / (H // 2)
-            w = max(4, round(W - t * (W - 4)))
-        else:
-            t = (y - H // 2) / (H // 2)
-            w = max(4, round(4 + t * (W - 4)))
-        x0 = cx - w // 2
-        x1 = cx + w // 2
-        painter.fillRect(x0, y, 1, 1, outline)
-        painter.fillRect(x1, y, 1, 1, outline)
-
-    painter.end()
-    return QIcon(px)
+        bottom = C["danger"]
+    return QIcon(draw_hourglass(32, usage_pct=pct, bottom_hex=bottom))
 
 
 class TrayManager:
@@ -90,7 +35,7 @@ class TrayManager:
         self._latest: Optional[UsageSnapshot] = None
 
         self._tray = QSystemTrayIcon(app)
-        self._tray.setIcon(_make_tray_icon(0.0))
+        self._tray.setIcon(_tray_icon(0.0))
         self._tray.setToolTip("Claude Hourglass — 読み込み中...")
 
         menu = QMenu()
@@ -113,12 +58,11 @@ class TrayManager:
         self._tray.activated.connect(self._on_activated)
         self._tray.show()
 
-        # Poll timer
         self._poll_timer = QTimer()
         self._poll_timer.timeout.connect(self._poll)
         interval = (config.get("poll_interval_sec") or 30) * 1000
         self._poll_timer.start(interval)
-        self._poll()  # immediate first poll
+        self._poll()
 
     # ------------------------------------------------------------------
 
@@ -126,10 +70,9 @@ class TrayManager:
         self._panel = panel
 
     def _poll(self) -> None:
-        # Try latest_usage.json first (fastest)
-        json_path = config.latest_json_path()
         snap: Optional[UsageSnapshot] = None
 
+        json_path = config.latest_json_path()
         if json_path.exists():
             try:
                 data = json.loads(json_path.read_text(encoding="utf-8"))
@@ -137,7 +80,6 @@ class TrayManager:
             except Exception:
                 pass
 
-        # Fallback to DB
         if snap is None:
             path = config.db_path()
             if path.exists():
@@ -151,24 +93,23 @@ class TrayManager:
     def _update_tray(self, snap: Optional[UsageSnapshot]) -> None:
         if snap is None:
             self._tray.setToolTip("Claude Hourglass — データなし")
-            self._tray.setIcon(_make_tray_icon(0.0))
+            self._tray.setIcon(_tray_icon(0.0))
             return
 
         h5 = snap.five_hour_used_pct or 0.0
         h7 = snap.seven_day_used_pct or 0.0
-        self._tray.setIcon(_make_tray_icon(h5))
+        self._tray.setIcon(_tray_icon(h5))
 
         from .ui.hourglass_panel import _format_reset
         reset_txt = _format_reset(snap.five_hour_resets_at)
-        tooltip = (
+        self._tray.setToolTip(
             f"Claude Hourglass\n"
             f"5h: {h5:.1f}% | 7d: {h7:.1f}%\n"
             f"リセット: {reset_txt}"
         )
-        self._tray.setToolTip(tooltip)
 
     def _on_activated(self, reason) -> None:
-        if reason == QSystemTrayIcon.Trigger:  # left click
+        if reason == QSystemTrayIcon.Trigger:
             self._toggle_panel()
 
     def _toggle_panel(self) -> None:
@@ -179,8 +120,7 @@ class TrayManager:
         else:
             self._panel.update_from_snapshot(self._latest)
             geo = self._tray.geometry()
-            anchor = QPoint(geo.right(), geo.top())
-            self._panel.show_near(anchor)
+            self._panel.show_near(QPoint(geo.right(), geo.top()))
 
     def _open_main(self) -> None:
         if self._on_open_main:

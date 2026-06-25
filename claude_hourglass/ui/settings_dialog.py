@@ -10,6 +10,7 @@ from PySide6.QtWidgets import (
 
 from .theme import C, ui_font
 from .. import config
+from ..resources import app_icon
 from ..startup import (
     _IS_WINDOWS,
     disable_startup,
@@ -23,6 +24,7 @@ class SettingsDialog(QDialog):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setWindowTitle("設定 — Claude Hourglass")
+        self.setWindowIcon(app_icon())
         self.setMinimumWidth(500)
         self._build()
         self._load()
