@@ -53,6 +53,9 @@ def main() -> None:
     _tray_holder[0] = tray
     tray.set_panel(panel)
 
+    if config.get("show_startup_panel"):
+        tray.show_startup_panel()
+
     sys.exit(app.exec())
 
 

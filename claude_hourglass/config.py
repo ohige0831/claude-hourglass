@@ -11,6 +11,8 @@ DEFAULTS: dict[str, Any] = {
     "poll_interval_sec": 30,
     "theme": "dark",
     "window_opacity": 0.95,
+    # 起動時ミニパネル表示 (True = 表示する)
+    "show_startup_panel": True,
     # 自動起動の真の状態は startup.is_startup_enabled() で読むこと (レジストリが正)
 }
 

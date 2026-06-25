@@ -10,6 +10,7 @@ from PySide6.QtWidgets import (
 )
 
 from .theme import C, mono_font, ui_font
+from .widgets.current_status_tab import CurrentStatusTab
 from .widgets.usage_chart import BarChart, SessionChart, TimeSeriesChart
 from .. import database
 from ..config import db_path
@@ -129,6 +130,7 @@ class MainWindow(QMainWindow):
         self._header = _Header()
         self._summary = _SummaryBar()
         self._tabs: Optional[QTabWidget] = None
+        self._current_tab: Optional[CurrentStatusTab] = None
         self._chart_5h: Optional[TimeSeriesChart] = None
         self._chart_7d: Optional[TimeSeriesChart] = None
         self._chart_daily: Optional[BarChart] = None
@@ -163,11 +165,20 @@ class MainWindow(QMainWindow):
         self._tabs = QTabWidget()
         content_lay.addWidget(self._tabs)
 
+        # ---------- Tab: 現在 ----------
+        tab_current = QWidget()
+        tab_current.setStyleSheet(f"background: {C['bg_secondary']};")
+        tc_lay = QVBoxLayout(tab_current)
+        tc_lay.setContentsMargins(12, 12, 12, 4)
+        self._current_tab = CurrentStatusTab(on_refresh=self.refresh_charts)
+        tc_lay.addWidget(self._current_tab)
+        self._tabs.addTab(tab_current, "現在")
+
         # ---------- Tab: 5時間制限 ----------
         tab_5h = QWidget()
         tab_5h.setStyleSheet(f"background: {C['bg_secondary']};")
         t5_lay = QVBoxLayout(tab_5h)
-        t5_lay.setContentsMargins(12, 12, 12, 12)
+        t5_lay.setContentsMargins(12, 12, 12, 4)
         self._chart_5h = TimeSeriesChart("5時間制限 使用率推移", C["accent_orange"])
         t5_lay.addWidget(self._chart_5h)
         self._tabs.addTab(tab_5h, "5時間制限")
@@ -176,7 +187,7 @@ class MainWindow(QMainWindow):
         tab_7d = QWidget()
         tab_7d.setStyleSheet(f"background: {C['bg_secondary']};")
         t7_lay = QVBoxLayout(tab_7d)
-        t7_lay.setContentsMargins(12, 12, 12, 12)
+        t7_lay.setContentsMargins(12, 12, 12, 4)
         self._chart_7d = TimeSeriesChart("7日制限 使用率推移", C["accent_blue"])
         t7_lay.addWidget(self._chart_7d)
         self._tabs.addTab(tab_7d, "7日制限")
@@ -185,7 +196,7 @@ class MainWindow(QMainWindow):
         tab_day = QWidget()
         tab_day.setStyleSheet(f"background: {C['bg_secondary']};")
         td_lay = QVBoxLayout(tab_day)
-        td_lay.setContentsMargins(12, 12, 12, 12)
+        td_lay.setContentsMargins(12, 12, 12, 4)
         self._chart_daily = BarChart("日別ピーク使用率 (5時間枠)", C["accent_amber"])
         td_lay.addWidget(self._chart_daily)
         self._tabs.addTab(tab_day, "日別")
@@ -194,7 +205,7 @@ class MainWindow(QMainWindow):
         tab_week = QWidget()
         tab_week.setStyleSheet(f"background: {C['bg_secondary']};")
         tw_lay = QVBoxLayout(tab_week)
-        tw_lay.setContentsMargins(12, 12, 12, 12)
+        tw_lay.setContentsMargins(12, 12, 12, 4)
         self._chart_weekly = BarChart("週別ピーク使用率 (5時間枠)", C["accent_orange"])
         tw_lay.addWidget(self._chart_weekly)
         self._tabs.addTab(tab_week, "週別")
@@ -203,7 +214,7 @@ class MainWindow(QMainWindow):
         tab_sess = QWidget()
         tab_sess.setStyleSheet(f"background: {C['bg_secondary']};")
         ts_lay = QVBoxLayout(tab_sess)
-        ts_lay.setContentsMargins(12, 12, 12, 12)
+        ts_lay.setContentsMargins(12, 12, 12, 4)
         self._chart_session = SessionChart()
         ts_lay.addWidget(self._chart_session)
         self._tabs.addTab(tab_sess, "セッション")
@@ -244,6 +255,9 @@ class MainWindow(QMainWindow):
         latest = database.latest(path)
 
         self._summary.update(latest)
+
+        if self._current_tab:
+            self._current_tab.update_snapshot(latest)
 
         if self._chart_5h:
             self._chart_5h.load(snapshots, "five_hour_used_pct")

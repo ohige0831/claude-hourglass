@@ -42,7 +42,8 @@ class TimeSeriesChart(QWidget):
 
     def _build(self) -> None:
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(0, 0, 0, 0)
+        # 下に余白を持たせてラベルがウィジェット境界でクリップされないようにする
+        layout.setContentsMargins(0, 0, 0, 10)
         layout.setSpacing(4)
 
         lbl = QLabel(self._title)
@@ -58,11 +59,14 @@ class TimeSeriesChart(QWidget):
         self._plot.setYRange(0, 100, padding=0.05)
         self._plot.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
 
-        # Bottom axis: disable SI prefix (prevents "時刻 (x1e+09)" on Unix timestamps)
+        # Bottom axis: 2行ラベル (MM/DD + HH:mm) が切れないよう高さを確保する
+        #   tickTextHeight: 1行 ≈ 11px、2行 = 22px + 余白 → 36px
+        #   setHeight: AxisItem がレイアウトに要求する総高さ (tick + offset + text)
         bottom = self._plot.getAxis("bottom")
-        bottom.setStyle(tickFont=mono_font(8))
+        bottom.setStyle(tickFont=mono_font(8), tickTextHeight=36)
+        bottom.setHeight(50)
         bottom.enableAutoSIPrefix(False)
-        bottom.setLabel("")  # no axis label — tick labels show MM/DD HH:mm
+        bottom.setLabel("")  # SI prefix を出さない; ラベルは setTicks() で設定
 
         pen = pg.mkPen(color=QColor(self._color), width=2)
         fill_color = QColor(self._color)
@@ -112,7 +116,7 @@ class BarChart(QWidget):
 
     def _build(self) -> None:
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setContentsMargins(0, 0, 0, 10)
         layout.setSpacing(4)
 
         lbl = QLabel(self._title)
@@ -125,7 +129,9 @@ class BarChart(QWidget):
         self._plot.showGrid(x=False, y=True, alpha=0.15)
         self._plot.setLabel("left", "ピーク使用率 %", color=C["text_muted"], size="9pt")
         self._plot.getAxis("left").setStyle(tickFont=mono_font(8))
-        self._plot.getAxis("bottom").setStyle(tickFont=mono_font(8))
+        bottom = self._plot.getAxis("bottom")
+        bottom.setStyle(tickFont=mono_font(8), tickTextHeight=18)
+        bottom.setHeight(32)
         self._plot.setYRange(0, 100, padding=0.05)
         self._plot.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         layout.addWidget(self._plot)
@@ -206,7 +212,7 @@ class SessionChart(QWidget):
 
     def _build(self) -> None:
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setContentsMargins(0, 0, 0, 10)
         layout.setSpacing(4)
 
         lbl = QLabel("セッション別コスト (USD)")
@@ -219,7 +225,9 @@ class SessionChart(QWidget):
         self._plot.showGrid(x=False, y=True, alpha=0.15)
         self._plot.setLabel("left", "コスト USD", color=C["text_muted"], size="9pt")
         self._plot.getAxis("left").setStyle(tickFont=mono_font(8))
-        self._plot.getAxis("bottom").setStyle(tickFont=mono_font(8))
+        bottom = self._plot.getAxis("bottom")
+        bottom.setStyle(tickFont=mono_font(8), tickTextHeight=18)
+        bottom.setHeight(32)
         self._plot.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         layout.addWidget(self._plot)
 

@@ -5,7 +5,7 @@ from typing import Optional
 from PySide6.QtCore import QPoint, Qt, QTimer
 from PySide6.QtGui import QColor, QPainter, QPen, QFont
 from PySide6.QtWidgets import (
-    QFrame, QHBoxLayout, QLabel, QPushButton, QVBoxLayout, QWidget,
+    QApplication, QFrame, QHBoxLayout, QLabel, QPushButton, QVBoxLayout, QWidget,
 )
 
 from .theme import C, mono_font, ui_font, qc
@@ -217,6 +217,18 @@ class HourglassPanel(QWidget):
         self.show()
         self.raise_()
         self.activateWindow()
+
+    def show_at_startup(self, duration_ms: int = 4000) -> None:
+        """起動時に画面右下へ表示し、duration_ms 後に自動で閉じる。"""
+        self.adjustSize()
+        screen = QApplication.primaryScreen().availableGeometry()
+        margin = 16
+        x = screen.right() - self.width() - margin
+        y = screen.bottom() - self.height() - margin
+        self.move(x, y)
+        self.show()
+        self.raise_()
+        QTimer.singleShot(duration_ms, self.hide)
 
 
 def _format_reset(resets_at: Optional[str]) -> str:

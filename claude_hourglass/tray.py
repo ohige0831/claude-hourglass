@@ -130,6 +130,13 @@ class TrayManager:
         if self._on_open_settings:
             self._on_open_settings()
 
+    def show_startup_panel(self, duration_ms: int = 4000) -> None:
+        """起動時に1回だけミニパネルを表示する。"""
+        if self._panel is None:
+            return
+        self._panel.update_from_snapshot(self._latest)
+        self._panel.show_at_startup(duration_ms)
+
     def reload_poll_interval(self) -> None:
         interval = (config.get("poll_interval_sec") or 30) * 1000
         self._poll_timer.setInterval(interval)
