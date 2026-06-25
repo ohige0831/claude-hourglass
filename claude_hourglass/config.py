@@ -9,9 +9,9 @@ DEFAULTS: dict[str, Any] = {
     "db_path": str(_DEFAULT_DIR / "usage.sqlite"),
     "latest_json_path": str(_DEFAULT_DIR / "latest_usage.json"),
     "poll_interval_sec": 30,
-    "start_on_boot": False,
     "theme": "dark",
     "window_opacity": 0.95,
+    # 自動起動の真の状態は startup.is_startup_enabled() で読むこと (レジストリが正)
 }
 
 _CONFIG_PATH = _DEFAULT_DIR / "config.json"

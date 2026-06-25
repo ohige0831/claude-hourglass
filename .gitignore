@@ -29,3 +29,6 @@ Thumbs.db
 
 # Local Claude settings
 .claude/settings.local.json
+
+# Generated auto-startup launcher (stored in ~/.claude_hourglass/, but ignore if path changed)
+launch_hourglass.vbs
